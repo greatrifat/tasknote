@@ -3,7 +3,7 @@ import Link from "next/link";
 
 export const metadata = {
   title: "TaskNote",
-  description: "Tasks and meetings, in one place",
+  description: "Notes and meetings, in one place",
 };
 
 export default function RootLayout({ children }) {
@@ -16,8 +16,8 @@ export default function RootLayout({ children }) {
               TaskNote
             </Link>
             <div className="flex gap-4 text-sm">
-              <Link href="/tasks" className="opacity-70 transition hover:opacity-100">
-                Tasks
+              <Link href="/notes" className="opacity-70 transition hover:opacity-100">
+                Notes
               </Link>
               <Link href="/meetings" className="opacity-70 transition hover:opacity-100">
                 Meetings

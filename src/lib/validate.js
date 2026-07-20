@@ -1,5 +1,3 @@
-export const TASK_STATUSES = ["todo", "in-progress", "done"];
-export const TASK_PRIORITIES = ["low", "medium", "high"];
 export const MEETING_SOURCES = ["manual", "voicetotext"];
 
 function str(value) {
@@ -31,11 +29,11 @@ function optionalUrl(body, key, errors, data) {
 }
 
 /**
- * Validates a task payload. `partial` skips required-field checks so the same
+ * Validates a note payload. `partial` skips required-field checks so the same
  * rules can back both POST and PATCH.
  * Returns { errors: string[], data: object }.
  */
-export function validateTask(body, { partial = false } = {}) {
+export function validateNote(body, { partial = false } = {}) {
   const errors = [];
   const data = {};
 
@@ -46,46 +44,32 @@ export function validateTask(body, { partial = false } = {}) {
     else data.title = title;
   }
 
-  if (body.description !== undefined) {
-    const description = str(body.description);
-    if (description.length > 5000) errors.push("description must be 5000 characters or fewer");
-    else data.description = description;
+  // The body of the note. Generous ceiling — a note is the long-form field here.
+  optionalText(body, "content", 50000, errors, data);
+
+  if (body.tags !== undefined) {
+    // Accept either an array or a comma-separated string from the form.
+    const raw = Array.isArray(body.tags) ? body.tags : str(body.tags).split(",");
+    const tags = raw.map((t) => str(t)).filter(Boolean);
+    if (tags.length > 20) errors.push("tags must be 20 entries or fewer");
+    else if (tags.some((t) => t.length > 40)) errors.push("each tag must be 40 characters or fewer");
+    else data.tags = tags;
+  } else if (!partial) {
+    data.tags = [];
   }
 
-  if (body.status !== undefined) {
-    const status = str(body.status);
-    if (!TASK_STATUSES.includes(status)) errors.push(`status must be one of: ${TASK_STATUSES.join(", ")}`);
-    else data.status = status;
+  if (body.pinned !== undefined) {
+    if (typeof body.pinned !== "boolean") errors.push("pinned must be true or false");
+    else data.pinned = body.pinned;
   } else if (!partial) {
-    data.status = "todo";
-  }
-
-  if (body.priority !== undefined) {
-    const priority = str(body.priority);
-    if (!TASK_PRIORITIES.includes(priority)) errors.push(`priority must be one of: ${TASK_PRIORITIES.join(", ")}`);
-    else data.priority = priority;
-  } else if (!partial) {
-    data.priority = "medium";
-  }
-
-  if (body.dueDate !== undefined) {
-    const raw = str(body.dueDate);
-    if (!raw) {
-      data.dueDate = null;
-    } else {
-      const parsed = new Date(raw);
-      if (Number.isNaN(parsed.getTime())) errors.push("dueDate must be a valid date");
-      else data.dueDate = parsed;
-    }
-  } else if (!partial) {
-    data.dueDate = null;
+    data.pinned = false;
   }
 
   return { errors, data };
 }
 
 /**
- * Validates a meeting payload. Same partial/full contract as validateTask.
+ * Validates a meeting payload. Same partial/full contract as validateNote.
  */
 export function validateMeeting(body, { partial = false } = {}) {
   const errors = [];

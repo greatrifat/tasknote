@@ -24,26 +24,26 @@ Open http://localhost:3000.
 | Route | Description |
 | --- | --- |
 | `/` | Landing page |
-| `/tasks` | Task list, create/edit form, status filter, done toggle |
-| `/meetings` | Meeting list with create/edit form |
+| `/notes` | Note table; "Add note" button opens the create/edit dialog |
+| `/meetings` | Meeting table; "Add meeting" button opens the create/edit dialog |
 
 ## API
 
 All endpoints return JSON. Errors use `{ "error": "message" }` with a 400/404/500 status.
 
-### Tasks — `tasks` collection
+### Notes — `notes` collection
 
 | Method | Route | Notes |
 | --- | --- | --- |
-| `GET` | `/api/tasks` | Supports `?status=` and `?q=` (title regex) |
-| `POST` | `/api/tasks` | Creates a task |
-| `GET` | `/api/tasks/:id` | Single task |
-| `PATCH` | `/api/tasks/:id` | Partial update |
-| `DELETE` | `/api/tasks/:id` | Removes a task |
+| `GET` | `/api/notes` | Pinned first, then newest; supports `?q=` (title **and** body) and `?tag=` |
+| `POST` | `/api/notes` | Creates a note |
+| `GET` | `/api/notes/:id` | Single note |
+| `PATCH` | `/api/notes/:id` | Partial update |
+| `DELETE` | `/api/notes/:id` | Removes a note |
 
-Fields: `title` (required, ≤200), `description` (≤5000), `status`
-(`todo` \| `in-progress` \| `done`), `priority` (`low` \| `medium` \| `high`),
-`dueDate` (date or null).
+Fields: `title` (required, ≤200), `content` (≤50000), `tags` (array or
+comma-separated string, ≤20 entries of ≤40 chars), `pinned` (boolean,
+default false).
 
 ### Meetings — `meetings` collection
 
