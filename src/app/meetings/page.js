@@ -199,6 +199,37 @@ export default function MeetingsPage() {
                 <p className="mt-2 text-xs opacity-60">With: {meeting.attendees.join(", ")}</p>
               )}
               {meeting.notes && <p className="mt-2 text-sm opacity-70">{meeting.notes}</p>}
+
+              {meeting.folderUrl && (
+                <a
+                  href={meeting.folderUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="mt-2 inline-block text-sm font-medium text-blue-600 hover:underline dark:text-blue-400"
+                >
+                  Open folder in Drive ↗
+                </a>
+              )}
+
+              {meeting.summary && (
+                <div className="mt-3">
+                  <h4 className="text-xs font-semibold uppercase tracking-wide opacity-50">Summary</h4>
+                  <p className="mt-1 whitespace-pre-wrap text-sm opacity-80">{meeting.summary}</p>
+                </div>
+              )}
+
+              {meeting.transcript && (
+                // Collapsed by default — a full transcript would bury every
+                // other meeting in the list.
+                <details className="mt-3">
+                  <summary className="cursor-pointer text-xs font-semibold uppercase tracking-wide opacity-50">
+                    Transcript
+                  </summary>
+                  <p className="mt-2 max-h-80 overflow-y-auto whitespace-pre-wrap text-sm opacity-80">
+                    {meeting.transcript}
+                  </p>
+                </details>
+              )}
             </div>
 
             <div className="flex shrink-0 gap-2">

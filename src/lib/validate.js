@@ -1,8 +1,33 @@
 export const TASK_STATUSES = ["todo", "in-progress", "done"];
 export const TASK_PRIORITIES = ["low", "medium", "high"];
+export const MEETING_SOURCES = ["manual", "voicetotext"];
 
 function str(value) {
   return typeof value === "string" ? value.trim() : "";
+}
+
+/**
+ * Collects an optional free-text field, pushing a length error rather than
+ * silently truncating — a half-stored transcript is worse than a rejected one.
+ */
+function optionalText(body, key, max, errors, data) {
+  if (body[key] === undefined) return;
+  const value = str(body[key]);
+  if (value.length > max) errors.push(`${key} must be ${max} characters or fewer`);
+  else data[key] = value;
+}
+
+/** Optional absolute URL. Empty clears the field. */
+function optionalUrl(body, key, errors, data) {
+  if (body[key] === undefined) return;
+  const value = str(body[key]);
+  if (!value) {
+    data[key] = "";
+  } else if (!/^https?:\/\//i.test(value) || value.length > 2000) {
+    errors.push(`${key} must be an http(s) URL of 2000 characters or fewer`);
+  } else {
+    data[key] = value;
+  }
 }
 
 /**
@@ -111,10 +136,34 @@ export function validateMeeting(body, { partial = false } = {}) {
     data.attendees = [];
   }
 
-  if (body.notes !== undefined) {
-    const notes = str(body.notes);
-    if (notes.length > 10000) errors.push("notes must be 10000 characters or fewer");
-    else data.notes = notes;
+  optionalText(body, "notes", 10000, errors, data);
+
+  // --- recording fields, written by VoiceToText -----------------------------
+  // A whole meeting transcript is far longer than hand-typed notes, so it gets
+  // its own field and its own ceiling instead of being crammed into `notes`.
+  optionalText(body, "transcript", 500000, errors, data);
+  optionalText(body, "summary", 50000, errors, data);
+  optionalUrl(body, "folderUrl", errors, data);
+  optionalUrl(body, "audioUrl", errors, data);
+  optionalUrl(body, "transcriptUrl", errors, data);
+
+  if (body.source !== undefined) {
+    const source = str(body.source);
+    if (!MEETING_SOURCES.includes(source)) {
+      errors.push(`source must be one of: ${MEETING_SOURCES.join(", ")}`);
+    } else {
+      data.source = source;
+    }
+  } else if (!partial) {
+    data.source = "manual";
+  }
+
+  // Stable per-device id. The recorder may retry a post whose response was lost,
+  // so POST upserts on this rather than creating a second copy of the meeting.
+  if (body.externalId !== undefined) {
+    const externalId = str(body.externalId);
+    if (externalId.length > 200) errors.push("externalId must be 200 characters or fewer");
+    else if (externalId) data.externalId = externalId;
   }
 
   return { errors, data };

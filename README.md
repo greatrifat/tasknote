@@ -49,7 +49,7 @@ Fields: `title` (required, ≤200), `description` (≤5000), `status`
 
 | Method | Route | Notes |
 | --- | --- | --- |
-| `GET` | `/api/meetings` | Sorted by `startsAt`; supports `?q=` |
+| `GET` | `/api/meetings` | Sorted by `startsAt`; supports `?q=` and `?source=` |
 | `POST` | `/api/meetings` | Creates a meeting |
 | `GET` | `/api/meetings/:id` | Single meeting |
 | `PATCH` | `/api/meetings/:id` | Partial update |
@@ -58,6 +58,17 @@ Fields: `title` (required, ≤200), `description` (≤5000), `status`
 Fields: `title` (required, ≤200), `startsAt` (required, date/time),
 `durationMinutes` (1–1440, default 30), `location` (≤200), `attendees`
 (array or comma-separated string, ≤50), `notes` (≤10000).
+
+Recording fields, written by the VoiceToText app after it transcribes a meeting
+and uploads it to Drive: `transcript` (≤500000), `summary` (≤50000), and the
+http(s) links `folderUrl`, `audioUrl`, `transcriptUrl` (≤2000 each).
+`source` is `manual` (default) or `voicetotext`.
+
+`externalId` (≤200) is an optional stable id from the recording device. When
+present, `POST` **upserts** on it rather than inserting, so a client retrying a
+post whose response was lost updates the existing meeting instead of creating a
+duplicate. An upsert only writes the fields present in the request, so a retry
+that omits `transcript` will not erase the stored one.
 
 Both resources get server-set `createdAt` / `updatedAt`, and `_id` is
 serialized to a string `id` in every response.
