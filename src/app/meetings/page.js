@@ -46,6 +46,27 @@ export default function MeetingsPage() {
   // Applied query, updated on a debounce so each keystroke does not hit Mongo.
   const [applied, setApplied] = useState("");
 
+  // Full transcripts and summaries, keyed by meeting id, fetched on first open.
+  // Cached so collapsing and reopening a row does not refetch.
+  const [details, setDetails] = useState({});
+
+  async function toggleDetail(id) {
+    if (expandedId === id) {
+      setExpandedId(null);
+      return;
+    }
+    setExpandedId(id);
+    if (details[id]) return;
+    try {
+      const res = await fetch(`/api/meetings/${id}`);
+      const body = await res.json();
+      if (!res.ok) throw new Error(body.error || "Failed to load");
+      setDetails((prev) => ({ ...prev, [id]: body }));
+    } catch (err) {
+      setDetails((prev) => ({ ...prev, [id]: { error: err.message } }));
+    }
+  }
+
   const load = useCallback(async () => {
     setLoading(true);
     try {
@@ -205,8 +226,9 @@ export default function MeetingsPage() {
             )}
 
             {meetings.map((meeting) => {
-              const detail = meeting.summary || meeting.transcript;
+              const detail = meeting.hasSummary || meeting.hasTranscript;
               const expanded = expandedId === meeting.id;
+              const loaded = details[meeting.id];
 
               return [
                 <tr
@@ -217,7 +239,7 @@ export default function MeetingsPage() {
                     {detail ? (
                       <button
                         className="text-left hover:underline"
-                        onClick={() => setExpandedId(expanded ? null : meeting.id)}
+                        onClick={() => toggleDetail(meeting.id)}
                         aria-expanded={expanded}
                       >
                         {meeting.title}
@@ -293,19 +315,23 @@ export default function MeetingsPage() {
                 expanded && (
                   <tr key={`${meeting.id}-detail`} className="border-b border-black/5 bg-black/[0.02] dark:border-white/5 dark:bg-white/[0.03]">
                     <td className="px-4 py-4" colSpan={8}>
-                      {meeting.summary && (
+                      {!loaded && <p className="text-sm opacity-60">Loading…</p>}
+                      {loaded?.error && (
+                        <p className="text-sm text-red-600 dark:text-red-400">{loaded.error}</p>
+                      )}
+                      {loaded?.summary && (
                         <div className="mb-3">
                           <h4 className="text-xs font-semibold uppercase tracking-wide opacity-50">Summary</h4>
-                          <p className="mt-1 whitespace-pre-wrap text-sm opacity-80">{meeting.summary}</p>
+                          <p className="mt-1 whitespace-pre-wrap text-sm opacity-80">{loaded.summary}</p>
                         </div>
                       )}
-                      {meeting.transcript && (
+                      {loaded?.transcript && (
                         <details>
                           <summary className="cursor-pointer text-xs font-semibold uppercase tracking-wide opacity-50">
                             Transcript
                           </summary>
                           <p className="mt-2 max-h-80 overflow-y-auto whitespace-pre-wrap text-sm opacity-80">
-                            {meeting.transcript}
+                            {loaded.transcript}
                           </p>
                         </details>
                       )}

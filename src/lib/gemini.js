@@ -135,9 +135,13 @@ const META_PROMPT = [
   '  like "meeting", "discussion", "transcript", "misc".',
   "- Prefer concrete nouns a person would actually search for later:",
   '  project names, people, technologies, decisions, deadlines.',
+  "- ALWAYS write tags in English, even when the meeting was held in another",
+  "  language. Translate the concept rather than transliterating it: a meeting",
+  '  about "সিআরএম" is tagged "crm", one about "ফিডব্যাক" is tagged "feedback".',
+  "  Keep proper nouns as they are normally written in English.",
+  "- Return fewer tags rather than padding with weak ones.",
   "",
-  "Both: use the language the meeting was held in. Return fewer tags rather",
-  "than padding with weak ones.",
+  "The title stays in the language of the meeting; only the tags are English.",
 ].join("\n");
 
 /** Normalises tags to the shape validateMeeting enforces. */

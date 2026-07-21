@@ -35,7 +35,26 @@ export async function GET(request) {
     if (tag) filter.tags = tag;
 
     const meetings = await getCollection("meetings");
-    const docs = await meetings.find(filter).sort({ startsAt: 1 }).toArray();
+
+    // The list deliberately does not carry transcripts. One meeting's transcript
+    // can run to hundreds of kilobytes, so sending every one to render a table
+    // of titles made the page's payload grow without bound. The row only needs
+    // to know whether a transcript exists; the text itself is fetched from
+    // /api/meetings/[id] when a row is actually opened.
+    const docs = await meetings
+      .aggregate([
+        { $match: filter },
+        { $sort: { startsAt: 1 } },
+        {
+          $addFields: {
+            hasSummary: { $gt: [{ $strLenCP: { $ifNull: ["$summary", ""] } }, 0] },
+            hasTranscript: { $gt: [{ $strLenCP: { $ifNull: ["$transcript", ""] } }, 0] },
+          },
+        },
+        { $project: { transcript: 0, summary: 0 } },
+      ])
+      .toArray();
+
     return NextResponse.json(docs.map(serialize));
   } catch (err) {
     return serverError(err);
