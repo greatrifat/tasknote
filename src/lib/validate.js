@@ -104,23 +104,16 @@ export function validateMeeting(body, { partial = false } = {}) {
     data.durationMinutes = 30;
   }
 
-  if (body.location !== undefined) {
-    const location = str(body.location);
-    if (location.length > 200) errors.push("location must be 200 characters or fewer");
-    else data.location = location;
-  }
-
-  if (body.attendees !== undefined) {
+  // Topical tags. Supplied by the client, or generated from the transcript when
+  // absent — see autoTags in the meetings route.
+  if (body.tags !== undefined) {
     // Accept either an array or a comma-separated string from the form.
-    const raw = Array.isArray(body.attendees) ? body.attendees : str(body.attendees).split(",");
-    const attendees = raw.map((a) => str(a)).filter(Boolean);
-    if (attendees.length > 50) errors.push("attendees must be 50 entries or fewer");
-    else data.attendees = attendees;
-  } else if (!partial) {
-    data.attendees = [];
+    const raw = Array.isArray(body.tags) ? body.tags : str(body.tags).split(",");
+    const tags = raw.map((t) => str(t)).filter(Boolean);
+    if (tags.length > 20) errors.push("tags must be 20 entries or fewer");
+    else if (tags.some((t) => t.length > 40)) errors.push("each tag must be 40 characters or fewer");
+    else data.tags = tags;
   }
-
-  optionalText(body, "notes", 10000, errors, data);
 
   // --- recording fields, written by VoiceToText -----------------------------
   // A whole meeting transcript is far longer than hand-typed notes, so it gets

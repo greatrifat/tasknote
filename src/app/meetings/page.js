@@ -7,9 +7,7 @@ const EMPTY = {
   title: "",
   startsAt: "",
   durationMinutes: 30,
-  location: "",
-  attendees: "",
-  notes: "",
+  tags: "",
 };
 
 // <input type="datetime-local"> needs local time as YYYY-MM-DDTHH:mm, while the
@@ -44,11 +42,15 @@ export default function MeetingsPage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  const [query, setQuery] = useState("");
+  // Applied query, updated on a debounce so each keystroke does not hit Mongo.
+  const [applied, setApplied] = useState("");
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await fetch("/api/meetings");
+      const url = applied ? `/api/meetings?q=${encodeURIComponent(applied)}` : "/api/meetings";
+      const res = await fetch(url);
       if (!res.ok) throw new Error("Failed to load meetings");
       setMeetings(await res.json());
       setError("");
@@ -57,11 +59,18 @@ export default function MeetingsPage() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [applied]);
 
   useEffect(() => {
     load();
   }, [load]);
+
+  // Searching the transcripts is a regex scan across every meeting, so wait for
+  // a pause in typing rather than firing on every character.
+  useEffect(() => {
+    const id = setTimeout(() => setApplied(query.trim()), 300);
+    return () => clearTimeout(id);
+  }, [query]);
 
   const closeForm = useCallback(() => {
     setFormOpen(false);
@@ -93,9 +102,7 @@ export default function MeetingsPage() {
       title: meeting.title || "",
       startsAt: toLocalInput(meeting.startsAt),
       durationMinutes: meeting.durationMinutes ?? 30,
-      location: meeting.location || "",
-      attendees: (meeting.attendees || []).join(", "),
-      notes: meeting.notes || "",
+      tags: (meeting.tags || []).join(", "),
     });
     setError("");
     setFormOpen(true);
@@ -106,7 +113,7 @@ export default function MeetingsPage() {
     setSaving(true);
     setError("");
     try {
-      // attendees goes as the raw comma-separated string; the API splits it.
+      // tags goes as the raw comma-separated string; the API splits it.
       const payload = { ...form, durationMinutes: Number(form.durationMinutes) };
       const res = await fetch(editingId ? `/api/meetings/${editingId}` : "/api/meetings", {
         method: editingId ? "PATCH" : "POST",
@@ -147,6 +154,24 @@ export default function MeetingsPage() {
         </button>
       </div>
 
+      <div className="mt-5 flex items-center gap-3">
+        <div className="relative flex-1">
+          <input
+            type="search"
+            className={input}
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search titles, summaries, transcripts and tags…"
+            aria-label="Search meetings"
+          />
+        </div>
+        {applied && (
+          <span className="whitespace-nowrap text-xs opacity-60">
+            {meetings.length} match{meetings.length === 1 ? "" : "es"}
+          </span>
+        )}
+      </div>
+
       {error && !formOpen && (
         <p className="mt-4 text-sm text-red-600 dark:text-red-400">{error}</p>
       )}
@@ -159,8 +184,7 @@ export default function MeetingsPage() {
               <th className={th}>Date</th>
               <th className={th}>Time</th>
               <th className={th}>Duration</th>
-              <th className={th}>Location</th>
-              <th className={th}>Attendees</th>
+              <th className={th}>Tags</th>
               <th className={th}>Source</th>
               <th className={th}>Recording</th>
               <th className={`${th} text-right`}>Actions</th>
@@ -170,18 +194,18 @@ export default function MeetingsPage() {
           <tbody>
             {loading && (
               <tr>
-                <td className={`${td} opacity-60`} colSpan={9}>Loading…</td>
+                <td className={`${td} opacity-60`} colSpan={8}>Loading…</td>
               </tr>
             )}
 
             {!loading && meetings.length === 0 && (
               <tr>
-                <td className={`${td} opacity-60`} colSpan={9}>No meetings scheduled.</td>
+                <td className={`${td} opacity-60`} colSpan={8}>No meetings scheduled.</td>
               </tr>
             )}
 
             {meetings.map((meeting) => {
-              const detail = meeting.notes || meeting.summary || meeting.transcript;
+              const detail = meeting.summary || meeting.transcript;
               const expanded = expandedId === meeting.id;
 
               return [
@@ -207,11 +231,20 @@ export default function MeetingsPage() {
                   <td className={`${td} whitespace-nowrap`}>{formatDate(meeting.startsAt)}</td>
                   <td className={`${td} whitespace-nowrap`}>{formatTime(meeting.startsAt)}</td>
                   <td className={`${td} whitespace-nowrap`}>{meeting.durationMinutes} min</td>
-                  <td className={td}>{meeting.location || <span className="opacity-40">—</span>}</td>
-
                   <td className={td}>
-                    {meeting.attendees?.length ? (
-                      meeting.attendees.join(", ")
+                    {meeting.tags?.length ? (
+                      <span className="flex flex-wrap gap-1">
+                        {meeting.tags.map((tag) => (
+                          <button
+                            key={tag}
+                            onClick={() => setQuery(tag)}
+                            title={`Search for "${tag}"`}
+                            className="rounded bg-zinc-500/15 px-2 py-0.5 text-xs hover:bg-zinc-500/30"
+                          >
+                            {tag}
+                          </button>
+                        ))}
+                      </span>
                     ) : (
                       <span className="opacity-40">—</span>
                     )}
@@ -259,13 +292,7 @@ export default function MeetingsPage() {
                 // a detail row the title toggles open.
                 expanded && (
                   <tr key={`${meeting.id}-detail`} className="border-b border-black/5 bg-black/[0.02] dark:border-white/5 dark:bg-white/[0.03]">
-                    <td className="px-4 py-4" colSpan={9}>
-                      {meeting.notes && (
-                        <div className="mb-3">
-                          <h4 className="text-xs font-semibold uppercase tracking-wide opacity-50">Notes</h4>
-                          <p className="mt-1 whitespace-pre-wrap text-sm opacity-80">{meeting.notes}</p>
-                        </div>
-                      )}
+                    <td className="px-4 py-4" colSpan={8}>
                       {meeting.summary && (
                         <div className="mb-3">
                           <h4 className="text-xs font-semibold uppercase tracking-wide opacity-50">Summary</h4>
@@ -331,19 +358,10 @@ export default function MeetingsPage() {
                 </div>
 
                 <div>
-                  <label className={label} htmlFor="location">Location</label>
-                  <input id="location" className={input} value={form.location} onChange={set("location")} placeholder="Room 3 / Zoom link" />
+                  <label className={label} htmlFor="tags">Tags (comma separated)</label>
+                  <input id="tags" className={input} value={form.tags} onChange={set("tags")} placeholder="left blank, tags are generated" />
                 </div>
 
-                <div>
-                  <label className={label} htmlFor="attendees">Attendees (comma separated)</label>
-                  <input id="attendees" className={input} value={form.attendees} onChange={set("attendees")} placeholder="Ana, Ben, Chi" />
-                </div>
-
-                <div className="sm:col-span-2">
-                  <label className={label} htmlFor="notes">Notes</label>
-                  <textarea id="notes" rows={3} className={input} value={form.notes} onChange={set("notes")} />
-                </div>
               </div>
 
               {error && <p className="mt-4 text-sm text-red-600 dark:text-red-400">{error}</p>}

@@ -1,0 +1,165 @@
+/**
+ * Server-side Gemini client.
+ *
+ * The key is read from GEMINI_API_KEY and never reaches the browser — this
+ * module is only imported by route handlers. Do not prefix the variable with
+ * NEXT_PUBLIC_, which would inline it into the client bundle.
+ *
+ * GEMINI_API_KEY accepts several comma-separated keys. They are tried in order,
+ * which only adds headroom when they belong to different Google accounts: the
+ * free-tier quota is metered per project.
+ */
+
+/**
+ * Tried in order. Free-tier requests-per-day is metered separately for each
+ * model, so a model that is out of quota leaves the rest untouched. Models are
+ * also retired for new accounts while older ones keep access, so the list
+ * doubles as availability fallback.
+ */
+const MODELS = [
+  "gemini-3.5-flash",
+  "gemini-3-flash-preview",
+  "gemini-2.5-flash",
+  "gemini-2.5-flash-lite",
+];
+
+const endpointFor = (model) =>
+  `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
+
+class QuotaError extends Error {}
+class ModelUnavailableError extends Error {}
+class ModelBusyError extends Error {}
+class InvalidKeyError extends Error {}
+
+export function hasGeminiKey() {
+  return Boolean(process.env.GEMINI_API_KEY?.trim());
+}
+
+function keys() {
+  return (process.env.GEMINI_API_KEY || "")
+    .split(",")
+    .map((k) => k.trim())
+    .filter(Boolean);
+}
+
+async function callOnce({ apiKey, model, prompt, schema }) {
+  const res = await fetch(endpointFor(model), {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
+    body: JSON.stringify({
+      contents: [{ parts: [{ text: prompt }] }],
+      generationConfig: {
+        temperature: 0.2,
+        ...(schema ? { responseMimeType: "application/json", responseSchema: schema } : {}),
+      },
+    }),
+  });
+
+  const payload = await res.json().catch(() => null);
+  const message = payload?.error?.message ?? "";
+
+  if (res.status === 429) throw new QuotaError(message || "quota exceeded");
+  if (res.status === 404 || /no longer available|not found|not supported/i.test(message)) {
+    throw new ModelUnavailableError(message || `HTTP ${res.status}`);
+  }
+  if (res.status >= 500 || /high demand|overloaded/i.test(message)) {
+    throw new ModelBusyError(message || `HTTP ${res.status}`);
+  }
+  if (res.status === 401 || res.status === 403 || /api key not valid|invalid api key/i.test(message)) {
+    throw new InvalidKeyError(message || `HTTP ${res.status}`);
+  }
+  if (!res.ok) throw new Error(message || `HTTP ${res.status}`);
+
+  const text = (payload?.candidates?.[0]?.content?.parts ?? [])
+    .map((p) => p.text ?? "")
+    .join("")
+    .trim();
+  if (!text) throw new Error("Gemini returned an empty response");
+  return text;
+}
+
+/**
+ * Walks models within a key before moving to the next key, because quota is
+ * per model. A rejected key is abandoned immediately — no model will accept it.
+ */
+async function generate({ prompt, schema }) {
+  const apiKeys = keys();
+  if (apiKeys.length === 0) throw new Error("GEMINI_API_KEY is not configured");
+
+  let lastError = null;
+  for (const apiKey of apiKeys) {
+    for (const model of MODELS) {
+      try {
+        return await callOnce({ apiKey, model, prompt, schema });
+      } catch (err) {
+        lastError = err;
+        if (err instanceof InvalidKeyError) break; // next key
+        if (
+          err instanceof QuotaError ||
+          err instanceof ModelUnavailableError ||
+          err instanceof ModelBusyError
+        ) {
+          continue; // next model
+        }
+        throw err;
+      }
+    }
+  }
+  throw lastError ?? new Error("Gemini request failed");
+}
+
+const TAGS_SCHEMA = {
+  type: "ARRAY",
+  items: { type: "STRING" },
+};
+
+const TAG_PROMPT = [
+  "Read the meeting below and return 2 to 5 short topical tags for it.",
+  "",
+  "Rules:",
+  "- Lowercase, one or two words each, singular where natural.",
+  "- Describe what the meeting was ABOUT, not its format. Avoid generic filler",
+  '  like "meeting", "discussion", "transcript", "misc".',
+  "- Prefer concrete nouns a person would actually search for later:",
+  '  project names, people, technologies, decisions, deadlines.',
+  "- Use the language the meeting was held in.",
+  "- Return fewer tags rather than padding with weak ones.",
+].join("\n");
+
+/**
+ * Suggests tags for a meeting. Returns [] rather than throwing when no key is
+ * configured, so callers can attempt tagging unconditionally.
+ *
+ * Prefers the summary over the transcript: it is already a distilled view of the
+ * meeting, and it stops a long recording from dominating the request.
+ */
+export async function generateTags({ title, summary, transcript }) {
+  if (!hasGeminiKey()) return [];
+
+  const source = summary?.trim() || transcript?.trim().slice(0, 20000) || "";
+  if (!source && !title?.trim()) return [];
+
+  const body = `${TAG_PROMPT}\n\n---MEETING---\nTitle: ${title || "(untitled)"}\n\n${source || "(no content)"}`;
+  const raw = await generate({ prompt: body, schema: TAGS_SCHEMA });
+
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return [];
+  }
+  if (!Array.isArray(parsed)) return [];
+
+  // Normalise to the same shape validateMeeting enforces, so the caller can
+  // store the result without a second round of cleaning.
+  const seen = new Set();
+  const tags = [];
+  for (const item of parsed) {
+    const tag = String(item ?? "").trim().toLowerCase().slice(0, 40);
+    if (!tag || seen.has(tag)) continue;
+    seen.add(tag);
+    tags.push(tag);
+    if (tags.length === 5) break;
+  }
+  return tags;
+}
