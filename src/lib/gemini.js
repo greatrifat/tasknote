@@ -108,53 +108,44 @@ async function generate({ prompt, schema }) {
   throw lastError ?? new Error("Gemini request failed");
 }
 
-const TAGS_SCHEMA = {
-  type: "ARRAY",
-  items: { type: "STRING" },
+// Title and tags come back from one request rather than two. They are read off
+// the same text and the free-tier budget is roughly 20 requests per model per
+// day, so spending two on one meeting halves how many can be filed.
+const META_SCHEMA = {
+  type: "OBJECT",
+  properties: {
+    title: { type: "STRING" },
+    tags: { type: "ARRAY", items: { type: "STRING" } },
+  },
+  required: ["title", "tags"],
 };
 
-const TAG_PROMPT = [
-  "Read the meeting below and return 2 to 5 short topical tags for it.",
+const META_PROMPT = [
+  "Read the meeting below. Return a short title for it, and 2 to 5 topical tags.",
   "",
-  "Rules:",
+  "Title rules:",
+  "- 3 to 8 words naming what was actually discussed or decided.",
+  '- No date, no time, and no leading "Meeting"/"Call" — those are added',
+  "  separately and would be duplicated.",
+  "- Sentence case. No trailing full stop, no surrounding quotes.",
+  "",
+  "Tag rules:",
   "- Lowercase, one or two words each, singular where natural.",
   "- Describe what the meeting was ABOUT, not its format. Avoid generic filler",
   '  like "meeting", "discussion", "transcript", "misc".',
   "- Prefer concrete nouns a person would actually search for later:",
   '  project names, people, technologies, decisions, deadlines.',
-  "- Use the language the meeting was held in.",
-  "- Return fewer tags rather than padding with weak ones.",
+  "",
+  "Both: use the language the meeting was held in. Return fewer tags rather",
+  "than padding with weak ones.",
 ].join("\n");
 
-/**
- * Suggests tags for a meeting. Returns [] rather than throwing when no key is
- * configured, so callers can attempt tagging unconditionally.
- *
- * Prefers the summary over the transcript: it is already a distilled view of the
- * meeting, and it stops a long recording from dominating the request.
- */
-export async function generateTags({ title, summary, transcript }) {
-  if (!hasGeminiKey()) return [];
-
-  const source = summary?.trim() || transcript?.trim().slice(0, 20000) || "";
-  if (!source && !title?.trim()) return [];
-
-  const body = `${TAG_PROMPT}\n\n---MEETING---\nTitle: ${title || "(untitled)"}\n\n${source || "(no content)"}`;
-  const raw = await generate({ prompt: body, schema: TAGS_SCHEMA });
-
-  let parsed;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    return [];
-  }
-  if (!Array.isArray(parsed)) return [];
-
-  // Normalise to the same shape validateMeeting enforces, so the caller can
-  // store the result without a second round of cleaning.
+/** Normalises tags to the shape validateMeeting enforces. */
+function cleanTags(value) {
+  if (!Array.isArray(value)) return [];
   const seen = new Set();
   const tags = [];
-  for (const item of parsed) {
+  for (const item of value) {
     const tag = String(item ?? "").trim().toLowerCase().slice(0, 40);
     if (!tag || seen.has(tag)) continue;
     seen.add(tag);
@@ -162,4 +153,43 @@ export async function generateTags({ title, summary, transcript }) {
     if (tags.length === 5) break;
   }
   return tags;
+}
+
+/** Strips the quotes and trailing punctuation models like to add to a title. */
+function cleanTitle(value) {
+  return String(value ?? "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/^["'“”‘’]+|["'“”‘’]+$/g, "")
+    .replace(/[.。]+$/, "")
+    .slice(0, 120)
+    .trim();
+}
+
+/**
+ * Suggests a title and tags for a meeting. Returns empty values rather than
+ * throwing when no key is configured, so callers can ask unconditionally.
+ *
+ * Prefers the summary over the transcript: it is already a distilled view of the
+ * meeting, and it stops a long recording from dominating the request.
+ */
+export async function generateMeta({ title, summary, transcript }) {
+  const empty = { title: "", tags: [] };
+  if (!hasGeminiKey()) return empty;
+
+  const source = summary?.trim() || transcript?.trim().slice(0, 20000) || "";
+  // Without content there is nothing to name the meeting after; the existing
+  // title alone would only produce a paraphrase of itself.
+  if (!source) return empty;
+
+  const body = `${META_PROMPT}\n\n---MEETING---\n${source}`;
+  const raw = await generate({ prompt: body, schema: META_SCHEMA });
+
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return empty;
+  }
+  return { title: cleanTitle(parsed?.title), tags: cleanTags(parsed?.tags) };
 }

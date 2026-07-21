@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { getCollection } from "@/lib/mongodb";
 import { badRequest, serialize, serverError } from "@/lib/api";
 import { validateMeeting } from "@/lib/validate";
-import { generateTags } from "@/lib/gemini";
+import { generateMeta } from "@/lib/gemini";
 
 export const dynamic = "force-dynamic";
 
@@ -43,25 +43,55 @@ export async function GET(request) {
 }
 
 /**
- * Fills in tags when the client did not supply any. Tags that were sent are
- * never replaced — the model fills a blank, it does not overrule a decision.
- *
- * Failures are swallowed on purpose: tagging is a convenience, and a Gemini
- * outage or an exhausted quota must never stop a meeting from being stored.
+ * VoiceToText names every recording after its clock, e.g. "Meeting 2026-07-21
+ * 08:33". That is a placeholder, not a decision, so it may be replaced — and it
+ * is resent on every retry, so a stored generated title has to survive one.
  */
-async function autoTags(data, existing) {
-  if (data.tags?.length) return data.tags;
-  if (existing?.length) return existing;
+function isPlaceholderTitle(title) {
+  const value = (title ?? "").trim();
+  if (!value) return true;
+  if (/^untitled$/i.test(value)) return true;
+  // A generic word followed by a date, time or number and *nothing else*. The
+  // anchor matters: "Meeting about Q3 2026" is somebody's actual title and
+  // must not be overwritten.
+  return /^(meeting|recording)\s*\d[\d\s:/.-]*$/i.test(value);
+}
+
+/**
+ * Fills in the title and tags the client did not decide for itself. Anything
+ * supplied is kept — the model fills a blank, it does not overrule a decision.
+ *
+ * Failures are swallowed on purpose: this is a convenience, and a Gemini outage
+ * or an exhausted quota must never stop a meeting from being stored.
+ */
+async function autoMeta(data, existing) {
+  const wantTags = !data.tags?.length && !existing?.tags?.length;
+  // A generated title already stored is a decision too; only a placeholder on
+  // both sides is still open.
+  const wantTitle =
+    isPlaceholderTitle(data.title) && isPlaceholderTitle(existing?.title);
+
+  const result = {
+    tags: data.tags?.length ? data.tags : existing?.tags ?? [],
+    title: "",
+  };
+  if (!wantTags && !wantTitle) return result;
+
+  let meta = { title: "", tags: [] };
   try {
-    return await generateTags({
+    meta = await generateMeta({
       title: data.title,
       summary: data.summary,
       transcript: data.transcript,
     });
   } catch (err) {
-    console.error("auto-tagging failed:", err.message);
-    return [];
+    console.error("auto-titling failed:", err.message);
   }
+
+  if (wantTags && meta.tags.length) result.tags = meta.tags;
+  // 200 is validateMeeting's ceiling; the title is stored bypassing it.
+  if (wantTitle && meta.title) result.title = meta.title.slice(0, 200);
+  return result;
 }
 
 export async function POST(request) {
@@ -91,7 +121,15 @@ export async function POST(request) {
     // instead of creating a duplicate.
     if (data.externalId) {
       const existing = await meetings.findOne({ externalId: data.externalId });
-      const tags = await autoTags(data, existing?.tags);
+      const { tags, title } = await autoMeta(data, existing);
+
+      // A retry resends the placeholder title, so an already-generated one is
+      // carried forward explicitly rather than being overwritten by $set.
+      const keptTitle =
+        title ||
+        (isPlaceholderTitle(data.title) && !isPlaceholderTitle(existing?.title)
+          ? existing.title
+          : "");
 
       // Only fields actually present in the request are written. Defaulting the
       // absent ones into $set would let a retry that omits `durationMinutes`
@@ -103,7 +141,12 @@ export async function POST(request) {
       const updated = await meetings.findOneAndUpdate(
         { externalId: data.externalId },
         {
-          $set: { ...data, ...(tags.length ? { tags } : {}), updatedAt: now },
+          $set: {
+            ...data,
+            ...(tags.length ? { tags } : {}),
+            ...(keptTitle ? { title: keptTitle } : {}),
+            updatedAt: now,
+          },
           $setOnInsert: { ...onInsert, ...(tags.length ? {} : { tags: [] }), createdAt: now },
         },
         { upsert: true, returnDocument: "after" }
@@ -111,10 +154,12 @@ export async function POST(request) {
       return NextResponse.json(serialize(updated), { status: 201 });
     }
 
+    const meta = await autoMeta(data, null);
     const result = await meetings.insertOne({
       ...defaults,
       ...data,
-      tags: await autoTags(data),
+      ...(meta.title ? { title: meta.title } : {}),
+      tags: meta.tags,
       createdAt: now,
       updatedAt: now,
     });
