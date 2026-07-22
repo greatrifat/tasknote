@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { btnDanger, btnGhost, btnPrimary, input, label } from "@/components/ui";
+import { btnDangerSm, btnGhost, btnGhostSm, btnPrimary, input, label } from "@/components/ui";
 
 const EMPTY = { title: "", content: "", tags: "" };
 
@@ -228,8 +228,8 @@ export default function NotesPage() {
 
                   <td className={`${td} whitespace-nowrap text-right`}>
                     <span className="flex justify-end gap-2">
-                      <button className={btnGhost} onClick={() => openEdit(note)}>Edit</button>
-                      <button className={btnDanger} onClick={() => handleDelete(note.id)}>Delete</button>
+                      <button className={btnGhostSm} onClick={() => openEdit(note)}>Edit</button>
+                      <button className={btnDangerSm} onClick={() => handleDelete(note.id)}>Delete</button>
                     </span>
                   </td>
                 </tr>,

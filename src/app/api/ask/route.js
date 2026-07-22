@@ -107,11 +107,16 @@ function rankByKeyword(meetings, question) {
 }
 
 const ROUTER_SYSTEM = [
-  "You are given a numbered list of meeting titles and asked a question.",
-  "Reply with a JSON array of the numbers whose meetings might help answer it.",
+  "You are given a numbered list of meetings — each with a title, a date and its",
+  "tags — and asked a question. Reply with a JSON array of the numbers whose",
+  "meetings might help answer it.",
   "",
-  "- Match by MEANING, not spelling. The titles are often in a different language",
-  "  from the question: a question about 'tokens' matches 'টোকেন ব্যবস্থাপনা'.",
+  "- Use the TAGS as much as the title. Tags are always written in English even",
+  "  when the meeting was held in another language, so they are often the clearest",
+  "  match for an English question about a Bengali meeting.",
+  "- Match by MEANING, not spelling. A question about 'tokens' matches a meeting",
+  "  titled 'টোকেন ব্যবস্থাপনা' or tagged 'token management'.",
+  "- A date in the question ('last week', 'Tuesday') should narrow the list.",
   "- Include anything plausibly related. Being wrong costs one wasted lookup;",
   "  missing the right meeting means the question cannot be answered at all.",
   "- Order the numbers most promising first, at most 8 of them.",
@@ -119,7 +124,7 @@ const ROUTER_SYSTEM = [
 ].join("\n");
 
 /**
- * Picks which meetings to read, from their titles alone.
+ * Picks which meetings to read, from their titles, dates and tags.
  *
  * This exists because keyword matching cannot see that "tokens" and "টোকেন" are
  * the same subject, and a meeting that never gets selected produces a confident
@@ -134,7 +139,9 @@ async function routeToMeetings(meetings, question) {
   const list = meetings
     .map((m, i) => {
       const date = m.startsAt ? new Date(m.startsAt).toISOString().slice(0, 10) : "";
-      const tags = m.tags?.length ? ` — ${m.tags.join(", ")}` : "";
+      // Labelled, not just appended: separated by the same dash as the date, a
+      // tag list reads as part of the title.
+      const tags = m.tags?.length ? ` — tags: ${m.tags.join(", ")}` : "";
       return `[${i + 1}] ${m.title || "Untitled"} — ${date}${tags}`;
     })
     .join("\n");
@@ -205,8 +212,9 @@ export async function POST(request) {
     const meetings = await getCollection("meetings");
     const docs = await meetings.find({}).sort({ startsAt: -1 }).toArray();
 
-    // First pass: choose from titles alone. Falls back to keyword ranking if the
-    // router is unavailable, so the feature degrades rather than breaking.
+    // First pass: choose from titles, dates and tags. Falls back to keyword
+    // ranking if the router is unavailable, so the feature degrades rather than
+    // breaking.
     const routed = await routeToMeetings(docs, trimmed);
     const ordered = routed ?? rankByKeyword(docs, trimmed);
 

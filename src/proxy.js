@@ -24,7 +24,10 @@ export async function proxy(request) {
 
   const isLogin = pathname === "/login" || pathname.startsWith("/api/auth/");
   const isIngest = pathname === "/api/meetings" && request.method === "POST";
-  if (isLogin || isIngest) return NextResponse.next();
+  // Reveals nothing but "this is TaskNote and it is running", which is exactly
+  // what the recorder's settings screen needs to validate a pasted URL.
+  const isHealth = pathname === "/api/health";
+  if (isLogin || isIngest || isHealth) return NextResponse.next();
 
   if (await isValidSession(request.cookies.get(SESSION_COOKIE)?.value)) {
     return NextResponse.next();

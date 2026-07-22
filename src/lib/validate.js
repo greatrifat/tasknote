@@ -69,6 +69,59 @@ export function validateNote(body, { partial = false } = {}) {
 }
 
 /**
+ * Validates a saved link. Same partial/full contract as validateNote.
+ *
+ * Only the URL is required: the point of this section is saving something in
+ * one action, and a link with no title is still perfectly findable by its
+ * address. The title falls back to the hostname rather than rejecting the save.
+ */
+export function validateLink(body, { partial = false } = {}) {
+  const errors = [];
+  const data = {};
+
+  if (!partial || body.url !== undefined) {
+    const raw = str(body.url);
+    // A pasted address routinely omits the scheme; assume https rather than
+    // failing, since that is what a browser would do with it anyway.
+    const url = raw && !/^https?:\/\//i.test(raw) ? `https://${raw}` : raw;
+    if (!url) errors.push("url is required");
+    else if (!/^https?:\/\/[^\s.]+\.[^\s]+$/i.test(url) || url.length > 2000) {
+      errors.push("url must be a valid http(s) address of 2000 characters or fewer");
+    } else {
+      data.url = url;
+    }
+  }
+
+  if (body.title !== undefined || (!partial && data.url)) {
+    const title = str(body.title);
+    if (title.length > 200) errors.push("title must be 200 characters or fewer");
+    else if (title) data.title = title;
+    else if (data.url) {
+      // Hostname without "www." reads better in a list than a bare URL.
+      try {
+        data.title = new URL(data.url).hostname.replace(/^www\./, "");
+      } catch {
+        data.title = data.url.slice(0, 200);
+      }
+    }
+  }
+
+  optionalText(body, "note", 2000, errors, data);
+
+  if (body.tags !== undefined) {
+    const raw = Array.isArray(body.tags) ? body.tags : str(body.tags).split(",");
+    const tags = raw.map((t) => str(t)).filter(Boolean);
+    if (tags.length > 20) errors.push("tags must be 20 entries or fewer");
+    else if (tags.some((t) => t.length > 40)) errors.push("each tag must be 40 characters or fewer");
+    else data.tags = tags;
+  } else if (!partial) {
+    data.tags = [];
+  }
+
+  return { errors, data };
+}
+
+/**
  * Validates a meeting payload. Same partial/full contract as validateNote.
  */
 export function validateMeeting(body, { partial = false } = {}) {

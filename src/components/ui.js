@@ -15,3 +15,12 @@ export const btnPrimary = `${btn} bg-zinc-900 text-white hover:bg-zinc-700 dark:
 export const btnGhost = `${btn} border border-black/15 hover:bg-black/5 dark:border-white/15 dark:hover:bg-white/10`;
 
 export const btnDanger = `${btn} border border-red-500/40 text-red-600 hover:bg-red-500/10 dark:text-red-400`;
+
+// Row actions, where a full-size button competes with the content it acts on.
+// Kept as separate names so dialog buttons stay comfortably clickable.
+const btnSm =
+  "rounded px-2 py-1 text-xs font-medium transition disabled:cursor-not-allowed disabled:opacity-50";
+
+export const btnGhostSm = `${btnSm} border border-black/15 hover:bg-black/5 dark:border-white/15 dark:hover:bg-white/10`;
+
+export const btnDangerSm = `${btnSm} border border-red-500/40 text-red-600 hover:bg-red-500/10 dark:text-red-400`;

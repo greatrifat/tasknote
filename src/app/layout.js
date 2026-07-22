@@ -16,6 +16,9 @@ export default function RootLayout({ children }) {
               TaskNote
             </Link>
             <div className="flex gap-4 text-sm">
+              <Link href="/links" className="opacity-70 transition hover:opacity-100">
+                Links
+              </Link>
               <Link href="/notes" className="opacity-70 transition hover:opacity-100">
                 Notes
               </Link>

@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { btnDanger, btnGhost, btnPrimary, input, label } from "@/components/ui";
+import { btnDangerSm, btnGhost, btnGhostSm, btnPrimary, input, label } from "@/components/ui";
 
 const EMPTY = {
   title: "",
@@ -34,7 +34,7 @@ const SUMMARY_TEMPLATE = [
 ].join("\n");
 
 /** Rows per page. Kept in step with the API's own default. */
-const PER_PAGE = 25;
+const PER_PAGE = 10;
 
 /** True when the template was left as-is, so it should not be stored as a summary. */
 function isUntouchedTemplate(value) {
@@ -295,11 +295,14 @@ export default function MeetingsPage() {
         <table className="w-full border-collapse text-left">
           <thead className="border-b border-black/10 bg-black/[0.03] dark:border-white/10 dark:bg-white/[0.04]">
             <tr>
-              <th className={th}>Title</th>
+              {/* The title carries the meaning, so it gets the room. Without a
+                  width the browser splits eight columns evenly and a Bengali
+                  title wraps onto four lines beside empty space. */}
+              <th className={`${th} w-[30%] min-w-[15rem]`}>Title</th>
               <th className={th}>Date</th>
               <th className={th}>Time</th>
               <th className={th}>Duration</th>
-              <th className={th}>Tags</th>
+              <th className={`${th} w-[18%]`}>Tags</th>
               <th className={th}>Source</th>
               <th className={th}>Recording</th>
               <th className={`${th} text-right`}>Actions</th>
@@ -398,8 +401,8 @@ export default function MeetingsPage() {
 
                   <td className={`${td} whitespace-nowrap text-right`}>
                     <span className="flex justify-end gap-2">
-                      <button className={btnGhost} onClick={() => openEdit(meeting)}>Edit</button>
-                      <button className={btnDanger} onClick={() => handleDelete(meeting.id)}>Delete</button>
+                      <button className={btnGhostSm} onClick={() => openEdit(meeting)}>Edit</button>
+                      <button className={btnDangerSm} onClick={() => handleDelete(meeting.id)}>Delete</button>
                     </span>
                   </td>
                 </tr>,
@@ -438,7 +441,9 @@ export default function MeetingsPage() {
         </table>
       </div>
 
-      {total > 0 && (
+      {/* Only when there is somewhere to go. "Page 1 of 1" with both buttons
+          greyed out is three lines of furniture saying nothing. */}
+      {pageCount > 1 && (
         <div className="mt-4 flex items-center justify-between text-sm">
           <span className="opacity-60">
             {(page - 1) * PER_PAGE + 1}–{Math.min(page * PER_PAGE, total)} of {total}

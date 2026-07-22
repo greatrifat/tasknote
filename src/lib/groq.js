@@ -17,7 +17,13 @@ const MODELS = ["llama-3.3-70b-versatile", "openai/gpt-oss-120b", "llama-3.1-8b-
 
 const ENDPOINT = "https://api.groq.com/openai/v1/chat/completions";
 
-class RateLimitError extends Error {}
+class RateLimitError extends Error {
+  constructor(message, retryAfter) {
+    super(message);
+    /** Seconds Groq asked us to wait, or null when it did not say. */
+    this.retryAfter = retryAfter ?? null;
+  }
+}
 class ModelUnavailableError extends Error {}
 class InvalidKeyError extends Error {}
 
@@ -31,6 +37,25 @@ class RequestTooLargeError extends Error {}
 export async function hasGroqKey() {
   return Boolean((await getSettings()).groqKey);
 }
+
+/**
+ * Groq sends `retry-after` only on a 429, and it is the one number worth
+ * having: a per-minute token limit clears in seconds, and telling someone to
+ * "wait a minute" when the answer is four seconds away is needlessly wrong.
+ *
+ * Values are seconds, sometimes fractional ("2.5"). Anything unparseable
+ * becomes null rather than a guess.
+ */
+export function parseRetryAfter(value) {
+  if (!value) return null;
+  const seconds = Number(String(value).replace(/s$/i, "").trim());
+  return Number.isFinite(seconds) && seconds >= 0 ? Math.ceil(seconds) : null;
+}
+
+/** Waits below this are simply taken, rather than handed back to the user. */
+const AUTO_RETRY_MAX_SECONDS = 8;
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 async function callOnce({ apiKey, model, system, user, maxTokens }) {
   const res = await fetch(ENDPOINT, {
@@ -58,7 +83,12 @@ async function callOnce({ apiKey, model, system, user, maxTokens }) {
   if (res.status === 413 || /request too large|reduce your message size/i.test(message)) {
     throw new RequestTooLargeError(message || "request too large");
   }
-  if (res.status === 429) throw new RateLimitError(message || "rate limited");
+  if (res.status === 429) {
+    throw new RateLimitError(
+      message || "rate limited",
+      parseRetryAfter(res.headers.get("retry-after"))
+    );
+  }
   if (res.status === 404 || /does not exist|decommissioned/i.test(message)) {
     throw new ModelUnavailableError(message || `HTTP ${res.status}`);
   }
@@ -81,11 +111,31 @@ export async function askGroq({ system, user, maxTokens }) {
   if (!groqKey) throw new Error("No Groq API key configured. Add one in Settings.");
 
   let lastError = null;
+  let waited = false;
+
   for (const model of MODELS) {
     try {
       return await callOnce({ apiKey: groqKey, model, system, user, maxTokens });
     } catch (err) {
       lastError = err;
+
+      // A per-minute token limit clears on its own, and Groq says exactly when.
+      // Waiting a few seconds beats falling back to a weaker model — but only
+      // once per request, so a question can never hang for long.
+      if (
+        err instanceof RateLimitError &&
+        !waited &&
+        err.retryAfter !== null &&
+        err.retryAfter <= AUTO_RETRY_MAX_SECONDS
+      ) {
+        waited = true;
+        await sleep(err.retryAfter * 1000 + 250);
+        try {
+          return await callOnce({ apiKey: groqKey, model, system, user, maxTokens });
+        } catch (retryErr) {
+          lastError = retryErr;
+        }
+      }
       if (err instanceof InvalidKeyError) {
         throw new Error(`Groq rejected the API key: ${err.message}`);
       }
@@ -103,8 +153,11 @@ export async function askGroq({ system, user, maxTokens }) {
   // Every model rate-limited means the per-minute token budget is spent, which
   // clears on its own — worth saying, since the raw message reads like a wall.
   if (lastError instanceof RateLimitError) {
+    const wait = lastError.retryAfter;
     throw new Error(
-      "Groq's free tier is rate limited right now (tokens per minute). Wait a minute and ask again."
+      wait
+        ? `Groq's free tier is rate limited. Try again in ${wait} second${wait === 1 ? "" : "s"}.`
+        : "Groq's free tier is rate limited (tokens per minute). Wait a minute and ask again."
     );
   }
   throw lastError ?? new Error("Groq request failed");

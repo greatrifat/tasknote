@@ -7,7 +7,7 @@ import { generateMeta } from "@/lib/gemini";
 export const dynamic = "force-dynamic";
 
 /** Enough to fill a screen without scrolling far; overridable per request. */
-const DEFAULT_PER_PAGE = 25;
+const DEFAULT_PER_PAGE = 10;
 
 /** Escapes a user's query so regex characters are matched literally. */
 function escapeRegex(value) {
