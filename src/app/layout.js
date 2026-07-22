@@ -22,6 +22,12 @@ export default function RootLayout({ children }) {
               <Link href="/meetings" className="opacity-70 transition hover:opacity-100">
                 Meetings
               </Link>
+              <Link href="/ask" className="opacity-70 transition hover:opacity-100">
+                Ask
+              </Link>
+              <Link href="/settings" className="opacity-70 transition hover:opacity-100">
+                Settings
+              </Link>
             </div>
           </nav>
         </header>

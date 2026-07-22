@@ -1,13 +1,16 @@
+import { getSettings } from "@/lib/settings";
+
 /**
  * Server-side Gemini client.
  *
- * The key is read from GEMINI_API_KEY and never reaches the browser — this
- * module is only imported by route handlers. Do not prefix the variable with
- * NEXT_PUBLIC_, which would inline it into the client bundle.
+ * The key comes from the settings collection, falling back to GEMINI_API_KEY.
+ * Either way it never reaches the browser — this module is only imported by
+ * route handlers. Do not prefix the variable with NEXT_PUBLIC_, which would
+ * inline it into the client bundle.
  *
- * GEMINI_API_KEY accepts several comma-separated keys. They are tried in order,
- * which only adds headroom when they belong to different Google accounts: the
- * free-tier quota is metered per project.
+ * Several comma-separated keys are accepted. They are tried in order, which only
+ * adds headroom when they belong to different Google accounts: the free-tier
+ * quota is metered per project.
  */
 
 /**
@@ -31,12 +34,18 @@ class ModelUnavailableError extends Error {}
 class ModelBusyError extends Error {}
 class InvalidKeyError extends Error {}
 
-export function hasGeminiKey() {
-  return Boolean(process.env.GEMINI_API_KEY?.trim());
+export async function hasGeminiKey() {
+  return (await keys()).length > 0;
 }
 
-function keys() {
-  return (process.env.GEMINI_API_KEY || "")
+/**
+ * From the settings collection, falling back to GEMINI_API_KEY — so a key set
+ * on the settings page wins, and a deployment that only has the environment
+ * variable keeps working unchanged.
+ */
+async function keys() {
+  const { geminiKey } = await getSettings();
+  return geminiKey
     .split(",")
     .map((k) => k.trim())
     .filter(Boolean);
@@ -83,7 +92,7 @@ async function callOnce({ apiKey, model, prompt, schema }) {
  * per model. A rejected key is abandoned immediately — no model will accept it.
  */
 async function generate({ prompt, schema }) {
-  const apiKeys = keys();
+  const apiKeys = await keys();
   if (apiKeys.length === 0) throw new Error("GEMINI_API_KEY is not configured");
 
   let lastError = null;
@@ -179,7 +188,7 @@ function cleanTitle(value) {
  */
 export async function generateMeta({ title, summary, transcript }) {
   const empty = { title: "", tags: [] };
-  if (!hasGeminiKey()) return empty;
+  if (!(await hasGeminiKey())) return empty;
 
   const source = summary?.trim() || transcript?.trim().slice(0, 20000) || "";
   // Without content there is nothing to name the meeting after; the existing

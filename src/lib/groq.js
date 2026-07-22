@@ -1,0 +1,93 @@
+/**
+ * Groq client, used for the work Gemini's free tier cannot afford.
+ *
+ * The division is deliberate: Gemini allows roughly 20 requests per model per
+ * day and writes better Bengali, so it keeps the summaries. Groq allows
+ * thousands and answers in a second, so it takes the volume work — questions
+ * across every meeting, bulk re-tagging — where speed and quantity matter more
+ * than prose quality.
+ */
+import { getSettings } from "@/lib/settings";
+
+/**
+ * Tried in order. All three carry a 131k context window, which is what makes
+ * "ask across every meeting" possible without an embedding index.
+ */
+const MODELS = ["llama-3.3-70b-versatile", "openai/gpt-oss-120b", "llama-3.1-8b-instant"];
+
+const ENDPOINT = "https://api.groq.com/openai/v1/chat/completions";
+
+class RateLimitError extends Error {}
+class ModelUnavailableError extends Error {}
+class InvalidKeyError extends Error {}
+
+export async function hasGroqKey() {
+  return Boolean((await getSettings()).groqKey);
+}
+
+async function callOnce({ apiKey, model, system, user, maxTokens }) {
+  const res = await fetch(ENDPOINT, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({
+      model,
+      temperature: 0.2,
+      max_tokens: maxTokens ?? 1500,
+      messages: [
+        { role: "system", content: system },
+        { role: "user", content: user },
+      ],
+    }),
+  });
+
+  const payload = await res.json().catch(() => null);
+  const message = payload?.error?.message ?? "";
+
+  if (res.status === 429) throw new RateLimitError(message || "rate limited");
+  if (res.status === 404 || /does not exist|decommissioned/i.test(message)) {
+    throw new ModelUnavailableError(message || `HTTP ${res.status}`);
+  }
+  if (res.status === 401 || res.status === 403) {
+    throw new InvalidKeyError(message || `HTTP ${res.status}`);
+  }
+  if (!res.ok) throw new Error(message || `HTTP ${res.status}`);
+
+  const text = payload?.choices?.[0]?.message?.content?.trim();
+  if (!text) throw new Error("Groq returned an empty response");
+  return text;
+}
+
+/**
+ * Walks the model list on rate limits and retirements. A rejected key fails
+ * immediately — no other model will accept it.
+ */
+export async function askGroq({ system, user, maxTokens }) {
+  const { groqKey } = await getSettings();
+  if (!groqKey) throw new Error("No Groq API key configured. Add one in Settings.");
+
+  let lastError = null;
+  for (const model of MODELS) {
+    try {
+      return await callOnce({ apiKey: groqKey, model, system, user, maxTokens });
+    } catch (err) {
+      lastError = err;
+      if (err instanceof InvalidKeyError) {
+        throw new Error(`Groq rejected the API key: ${err.message}`);
+      }
+      if (err instanceof RateLimitError || err instanceof ModelUnavailableError) continue;
+      throw err;
+    }
+  }
+
+  // Every model rate-limited means the per-minute token budget is spent, which
+  // clears on its own — worth saying, since the raw message reads like a wall.
+  if (lastError instanceof RateLimitError) {
+    throw new Error(
+      "Groq's free tier is rate limited right now (tokens per minute). Wait a minute and ask again."
+    );
+  }
+  throw lastError ?? new Error("Groq request failed");
+}
