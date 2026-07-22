@@ -5,3 +5,7 @@ out
 .DS_Store
 *.pem
 npm-debug.log*
+
+# Playwright MCP browser session artifacts — console logs and page snapshots
+# written during local testing. Never useful to anyone else.
+.playwright-mcp/
