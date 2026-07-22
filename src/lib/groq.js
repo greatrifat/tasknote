@@ -21,6 +21,13 @@ class RateLimitError extends Error {}
 class ModelUnavailableError extends Error {}
 class InvalidKeyError extends Error {}
 
+/**
+ * The prompt exceeds what one request may carry. Distinct from a rate limit
+ * because no amount of waiting or retrying fixes it, and the fallback models
+ * have *lower* per-minute limits — trying them would only fail again, slower.
+ */
+class RequestTooLargeError extends Error {}
+
 export async function hasGroqKey() {
   return Boolean((await getSettings()).groqKey);
 }
@@ -46,6 +53,11 @@ async function callOnce({ apiKey, model, system, user, maxTokens }) {
   const payload = await res.json().catch(() => null);
   const message = payload?.error?.message ?? "";
 
+  // Checked before the 429 branch: Groq reports an oversized prompt as a rate
+  // limit too, and the two need opposite handling.
+  if (res.status === 413 || /request too large|reduce your message size/i.test(message)) {
+    throw new RequestTooLargeError(message || "request too large");
+  }
   if (res.status === 429) throw new RateLimitError(message || "rate limited");
   if (res.status === 404 || /does not exist|decommissioned/i.test(message)) {
     throw new ModelUnavailableError(message || `HTTP ${res.status}`);
@@ -76,6 +88,12 @@ export async function askGroq({ system, user, maxTokens }) {
       lastError = err;
       if (err instanceof InvalidKeyError) {
         throw new Error(`Groq rejected the API key: ${err.message}`);
+      }
+      if (err instanceof RequestTooLargeError) {
+        throw new Error(
+          "Too much meeting text for one request. Ask a narrower question, or one " +
+            "that mentions the meeting you mean."
+        );
       }
       if (err instanceof RateLimitError || err instanceof ModelUnavailableError) continue;
       throw err;

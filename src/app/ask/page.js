@@ -93,7 +93,7 @@ export default function AskPage() {
           {result.sources?.length > 0 && (
             <div className="space-y-1">
               <h2 className="text-xs font-semibold uppercase tracking-wide opacity-50">
-                Meetings searched
+                Read {result.searched} of {result.total} meetings
               </h2>
               {result.sources.map((s) => (
                 <p key={s.id} className="text-xs opacity-70">
@@ -101,11 +101,24 @@ export default function AskPage() {
                   {s.startsAt ? ` — ${new Date(s.startsAt).toISOString().slice(0, 10)}` : ""}
                 </p>
               ))}
-              {result.total > result.searched && (
-                <p className="pt-1 text-xs opacity-50">
-                  Showing the {result.searched} most recent of {result.total} meetings —
-                  older ones did not fit in one request.
-                </p>
+
+              {/* Stated plainly rather than as a footnote: an answer of "not
+                  found" means nothing unless you know what went unread. */}
+              {result.skipped?.length > 0 && (
+                <details className="pt-2">
+                  <summary className="cursor-pointer text-xs text-amber-700 dark:text-amber-400">
+                    {result.skipped.length} meeting{result.skipped.length > 1 ? "s were" : " was"} not
+                    read — if the answer looks wrong, check these
+                  </summary>
+                  <div className="mt-1 space-y-0.5">
+                    {result.skipped.map((s) => (
+                      <p key={s.id} className="text-xs opacity-60">
+                        {s.title}
+                        {s.startsAt ? ` — ${new Date(s.startsAt).toISOString().slice(0, 10)}` : ""}
+                      </p>
+                    ))}
+                  </div>
+                </details>
               )}
             </div>
           )}

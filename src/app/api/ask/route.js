@@ -9,21 +9,75 @@ export const dynamic = "force-dynamic";
 /**
  * The binding limit is tokens-per-minute, not the context window.
  *
- * Groq's models hold 131k tokens, but the free tier allows only 6,000–15,000
- * tokens per MINUTE, so a request sized to the window is rejected outright —
- * and a couple of questions in quick succession share that same budget. At
- * roughly 4 characters per token, 16k characters is about 4k tokens, which
- * leaves room for the instructions, the question and a second question soon
- * after.
+ * Groq's models hold 131k tokens, but the free tier allows 12,000 tokens per
+ * MINUTE on the model we prefer — and the answer counts against the same
+ * budget. 7,000 tokens of context leaves room for the instructions, the
+ * question and the reply.
  */
-const CONTEXT_CHAR_BUDGET = 16_000;
+const TOKEN_BUDGET = 7_000;
+
+/** Answer length. Counts toward the same per-minute budget as the prompt. */
+const MAX_ANSWER_TOKENS = 900;
+
+/** So one very long meeting cannot consume the entire request. */
+const PER_MEETING_TOKENS = 2_200;
 
 /**
- * Transcripts are the fallback, not the default: a summary says the same thing
- * in a fraction of the tokens, and tokens are the scarce resource here. A
- * meeting that never got summarised still contributes, just truncated.
+ * The routing pass sees only titles, so this is generous: about 300 tokens for
+ * nine meetings, and still under the per-minute limit at several hundred.
  */
-const PER_MEETING_LIMIT = 3_000;
+const ROUTER_TOKEN_BUDGET = 4_000;
+
+/**
+ * Tokens are not characters, and the ratio depends entirely on the script.
+ *
+ * Latin text runs about 4 characters per token. Bengali runs closer to 0.6 —
+ * measured at 1.17 tokens per character across these meetings, which are ~69%
+ * Bengali. Budgeting by character count made a 14k-character request arrive as
+ * 16.5k tokens and get rejected outright. Non-ASCII is charged at 1.7 to stay
+ * on the safe side of that.
+ */
+function estimateTokens(text) {
+  const str = String(text ?? "");
+  let nonAscii = 0;
+  for (const char of str) if (char.codePointAt(0) > 127) nonAscii++;
+  return Math.ceil((str.length - nonAscii) * 0.25 + nonAscii * 1.7);
+}
+
+/** Cuts text to roughly a token count, respecting the same script weighting. */
+function clampToTokens(text, limit) {
+  if (estimateTokens(text) <= limit) return text;
+  let out = "";
+  let used = 0;
+  for (const char of String(text)) {
+    used += char.codePointAt(0) > 127 ? 1.7 : 0.25;
+    if (used > limit) break;
+    out += char;
+  }
+  return `${out.trimEnd()}…`;
+}
+
+/**
+ * Ranks meetings against the question so the token budget is spent on records
+ * that might actually answer it. Without this the newest meetings win by
+ * default, and with Bengali summaries only two or three fit at all.
+ */
+function relevanceScore(meeting, question) {
+  const words = question
+    .toLowerCase()
+    .split(/[\s,.?!;:()"'—–-]+/)
+    .filter((w) => w.length > 2);
+  if (!words.length) return 0;
+
+  const haystack = [meeting.title, (meeting.tags || []).join(" "), meeting.summary, meeting.transcript]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+
+  let score = 0;
+  for (const word of new Set(words)) if (haystack.includes(word)) score++;
+  return score;
+}
 
 const SYSTEM = [
   "You answer questions about a person's meetings using only the records provided.",
@@ -44,13 +98,73 @@ const SYSTEM = [
  * always means lately — and an older meeting silently dropped is better than a
  * request that fails for being too large.
  */
-function buildContext(meetings) {
+/** Orders meetings by keyword overlap, newest first within equal scores. */
+function rankByKeyword(meetings, question) {
+  return meetings
+    .map((meeting, index) => ({ meeting, index, score: relevanceScore(meeting, question) }))
+    .sort((a, b) => b.score - a.score || a.index - b.index)
+    .map((entry) => entry.meeting);
+}
+
+const ROUTER_SYSTEM = [
+  "You are given a numbered list of meeting titles and asked a question.",
+  "Reply with a JSON array of the numbers whose meetings might help answer it.",
+  "",
+  "- Match by MEANING, not spelling. The titles are often in a different language",
+  "  from the question: a question about 'tokens' matches 'টোকেন ব্যবস্থাপনা'.",
+  "- Include anything plausibly related. Being wrong costs one wasted lookup;",
+  "  missing the right meeting means the question cannot be answered at all.",
+  "- Order the numbers most promising first, at most 8 of them.",
+  "- Reply with the array and nothing else, e.g. [3,1,7]. Empty array if none fit.",
+].join("\n");
+
+/**
+ * Picks which meetings to read, from their titles alone.
+ *
+ * This exists because keyword matching cannot see that "tokens" and "টোকেন" are
+ * the same subject, and a meeting that never gets selected produces a confident
+ * "the records do not contain the answer" — indistinguishable from the thing not
+ * having happened. Titles are cheap: nine meetings cost roughly 300 tokens, so
+ * the routing request is a rounding error against reading the summaries.
+ *
+ * Returns null when routing fails, so the caller falls back to keyword ranking
+ * rather than losing the feature to a bad reply.
+ */
+async function routeToMeetings(meetings, question) {
+  const list = meetings
+    .map((m, i) => {
+      const date = m.startsAt ? new Date(m.startsAt).toISOString().slice(0, 10) : "";
+      const tags = m.tags?.length ? ` — ${m.tags.join(", ")}` : "";
+      return `[${i + 1}] ${m.title || "Untitled"} — ${date}${tags}`;
+    })
+    .join("\n");
+
+  try {
+    const raw = await askGroq({
+      system: ROUTER_SYSTEM,
+      user: `MEETINGS\n${clampToTokens(list, ROUTER_TOKEN_BUDGET)}\n\nQUESTION: ${question}`,
+      maxTokens: 120,
+    });
+
+    // Digits rather than JSON.parse: models wrap arrays in prose often enough
+    // that a strict parse would throw away usable answers.
+    const picked = [...new Set((raw.match(/\d+/g) || []).map(Number))]
+      .filter((n) => n >= 1 && n <= meetings.length)
+      .slice(0, 8);
+
+    return picked.length ? picked.map((n) => meetings[n - 1]) : null;
+  } catch {
+    return null;
+  }
+}
+
+function buildContext(ranked) {
   const blocks = [];
   const used = [];
   let total = 0;
 
-  for (const [index, meeting] of meetings.entries()) {
-    const number = index + 1;
+  for (const [position, meeting] of ranked.entries()) {
+    const number = position + 1;
     const date = meeting.startsAt ? new Date(meeting.startsAt).toISOString().slice(0, 10) : "unknown date";
 
     // Summary when there is one, transcript only when there is not. Sending
@@ -58,9 +172,9 @@ function buildContext(meetings) {
     const summary = meeting.summary?.trim();
     const transcript = meeting.transcript?.trim();
     const body = summary
-      ? `SUMMARY\n${summary}`
+      ? `SUMMARY\n${clampToTokens(summary, PER_MEETING_TOKENS)}`
       : transcript
-        ? `TRANSCRIPT (no summary)\n${transcript.slice(0, PER_MEETING_LIMIT)}`
+        ? `TRANSCRIPT (no summary)\n${clampToTokens(transcript, PER_MEETING_TOKENS)}`
         : "";
 
     if (!body) continue;
@@ -69,13 +183,16 @@ function buildContext(meetings) {
       meeting.tags?.length ? ` — tags: ${meeting.tags.join(", ")}` : ""
     }\n${body}`;
 
-    if (total + block.length > CONTEXT_CHAR_BUDGET) break;
-    total += block.length;
+    const cost = estimateTokens(block);
+    // `continue`, not `break`: a long meeting that does not fit should not stop
+    // a shorter, equally relevant one further down the list from being included.
+    if (total + cost > TOKEN_BUDGET) continue;
+    total += cost;
     blocks.push(block);
     used.push({ number, id: String(meeting._id), title: meeting.title, startsAt: meeting.startsAt });
   }
 
-  return { text: blocks.join("\n\n---\n\n"), used, chars: total };
+  return { text: blocks.join("\n\n---\n\n"), used, tokens: total };
 }
 
 export async function POST(request) {
@@ -88,25 +205,43 @@ export async function POST(request) {
     const meetings = await getCollection("meetings");
     const docs = await meetings.find({}).sort({ startsAt: -1 }).toArray();
 
-    const context = buildContext(docs);
+    // First pass: choose from titles alone. Falls back to keyword ranking if the
+    // router is unavailable, so the feature degrades rather than breaking.
+    const routed = await routeToMeetings(docs, trimmed);
+    const ordered = routed ?? rankByKeyword(docs, trimmed);
+
+    const context = buildContext(ordered);
     if (!context.used.length) {
       return NextResponse.json({
         answer: "There are no meetings with a transcript or summary to search yet.",
         sources: [],
+        searched: 0,
+        total: docs.length,
+        skipped: [],
       });
     }
 
     const answer = await askGroq({
       system: SYSTEM,
       user: `MEETINGS\n\n${context.text}\n\n---\n\nQUESTION: ${trimmed}`,
+      maxTokens: MAX_ANSWER_TOKENS,
     });
+
+    // Which meetings were NOT read. A "not found" answer that only looked at
+    // three of nine meetings is not the same as the thing never happening, and
+    // the page cannot say so unless it knows what was left out.
+    const readIds = new Set(context.used.map((u) => u.id));
+    const skipped = docs
+      .filter((d) => !readIds.has(String(d._id)))
+      .map((d) => ({ id: String(d._id), title: d.title, startsAt: d.startsAt }));
 
     return NextResponse.json({
       answer,
       sources: context.used,
-      // Surfaced so the page can say when older meetings did not fit.
       searched: context.used.length,
       total: docs.length,
+      skipped,
+      routed: Boolean(routed),
     });
   } catch (err) {
     // A missing key or an exhausted Groq account is the user's problem to fix,
