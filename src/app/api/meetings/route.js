@@ -6,6 +6,9 @@ import { generateMeta } from "@/lib/gemini";
 
 export const dynamic = "force-dynamic";
 
+/** Enough to fill a screen without scrolling far; overridable per request. */
+const DEFAULT_PER_PAGE = 25;
+
 /** Escapes a user's query so regex characters are matched literally. */
 function escapeRegex(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -34,7 +37,13 @@ export async function GET(request) {
     if (source) filter.source = source;
     if (tag) filter.tags = tag;
 
+    // Paged in the database rather than the browser: the point is that rows the
+    // user cannot see are never read, serialised or sent.
+    const page = Math.max(1, Number(searchParams.get("page")) || 1);
+    const perPage = Math.min(100, Math.max(1, Number(searchParams.get("perPage")) || DEFAULT_PER_PAGE));
+
     const meetings = await getCollection("meetings");
+    const total = await meetings.countDocuments(filter);
 
     // The list deliberately does not carry transcripts. One meeting's transcript
     // can run to hundreds of kilobytes, so sending every one to render a table
@@ -44,7 +53,10 @@ export async function GET(request) {
     const docs = await meetings
       .aggregate([
         { $match: filter },
-        { $sort: { startsAt: 1 } },
+        // Newest first, so page one is the meetings anyone actually wants.
+        { $sort: { startsAt: -1 } },
+        { $skip: (page - 1) * perPage },
+        { $limit: perPage },
         {
           $addFields: {
             hasSummary: { $gt: [{ $strLenCP: { $ifNull: ["$summary", ""] } }, 0] },
@@ -55,7 +67,15 @@ export async function GET(request) {
       ])
       .toArray();
 
-    return NextResponse.json(docs.map(serialize));
+    // The body stays a plain array so existing clients keep working; the paging
+    // counts ride along in headers.
+    return NextResponse.json(docs.map(serialize), {
+      headers: {
+        "X-Total-Count": String(total),
+        "X-Page": String(page),
+        "X-Per-Page": String(perPage),
+      },
+    });
   } catch (err) {
     return serverError(err);
   }

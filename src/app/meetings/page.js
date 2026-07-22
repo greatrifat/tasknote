@@ -8,7 +8,42 @@ const EMPTY = {
   startsAt: "",
   durationMinutes: 30,
   tags: "",
+  summary: "",
 };
+
+/**
+ * The same four sections VoiceToText's summariser produces, so a hand-written
+ * meeting reads identically to a recorded one. This is not cosmetic: the Ask
+ * page feeds summaries to the model, and consistent headings are what let it
+ * find decisions and action items rather than guessing at prose.
+ *
+ * Kept in step with SUMMARY_PROMPT in the app's src/gemini.ts.
+ */
+const SUMMARY_TEMPLATE = [
+  "OVERVIEW",
+  "",
+  "",
+  "KEY POINTS",
+  "- ",
+  "",
+  "DECISIONS",
+  "- ",
+  "",
+  "ACTION ITEMS",
+  "- owner — task — deadline",
+].join("\n");
+
+/** Rows per page. Kept in step with the API's own default. */
+const PER_PAGE = 25;
+
+/** True when the template was left as-is, so it should not be stored as a summary. */
+function isUntouchedTemplate(value) {
+  const stripped = String(value ?? "")
+    .replace(/OVERVIEW|KEY POINTS|DECISIONS|ACTION ITEMS/g, "")
+    .replace(/owner — task — deadline/g, "")
+    .replace(/[-\s]/g, "");
+  return stripped.length === 0;
+}
 
 // <input type="datetime-local"> needs local time as YYYY-MM-DDTHH:mm, while the
 // API returns UTC ISO. Shift by the timezone offset so the displayed clock time
@@ -50,6 +85,15 @@ export default function MeetingsPage() {
   // Cached so collapsing and reopening a row does not refetch.
   const [details, setDetails] = useState({});
 
+  // Whether the editing form holds the meeting's real summary. False while the
+  // fetch is in flight or after it failed, which is what stops a submit from
+  // overwriting a stored summary with an empty textarea.
+  const [summaryLoaded, setSummaryLoaded] = useState(true);
+
+  const [page, setPage] = useState(1);
+  const [total, setTotal] = useState(0);
+  const pageCount = Math.max(1, Math.ceil(total / PER_PAGE));
+
   async function toggleDetail(id) {
     if (expandedId === id) {
       setExpandedId(null);
@@ -70,17 +114,19 @@ export default function MeetingsPage() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const url = applied ? `/api/meetings?q=${encodeURIComponent(applied)}` : "/api/meetings";
-      const res = await fetch(url);
+      const params = new URLSearchParams({ page: String(page), perPage: String(PER_PAGE) });
+      if (applied) params.set("q", applied);
+      const res = await fetch(`/api/meetings?${params}`);
       if (!res.ok) throw new Error("Failed to load meetings");
       setMeetings(await res.json());
+      setTotal(Number(res.headers.get("X-Total-Count")) || 0);
       setError("");
     } catch (err) {
       setError(err.message);
     } finally {
       setLoading(false);
     }
-  }, [applied]);
+  }, [applied, page]);
 
   useEffect(() => {
     load();
@@ -92,6 +138,12 @@ export default function MeetingsPage() {
     const id = setTimeout(() => setApplied(query.trim()), 300);
     return () => clearTimeout(id);
   }, [query]);
+
+  // A new search restarts at page one; staying on page 4 of the previous result
+  // set would show an empty table.
+  useEffect(() => {
+    setPage(1);
+  }, [applied]);
 
   const closeForm = useCallback(() => {
     setFormOpen(false);
@@ -111,22 +163,45 @@ export default function MeetingsPage() {
   }, [formOpen, closeForm]);
 
   function openCreate() {
-    setForm(EMPTY);
+    // Prefilled rather than an empty box: typing into a skeleton produces the
+    // sectioned format, and a blank textarea invites free prose that the Ask
+    // page then has to interpret.
+    setForm({ ...EMPTY, summary: SUMMARY_TEMPLATE });
+    setSummaryLoaded(true);
     setEditingId(null);
     setError("");
     setFormOpen(true);
   }
 
-  function openEdit(meeting) {
+  async function openEdit(meeting) {
     setEditingId(meeting.id);
     setForm({
       title: meeting.title || "",
       startsAt: toLocalInput(meeting.startsAt),
       durationMinutes: meeting.durationMinutes ?? 30,
       tags: (meeting.tags || []).join(", "),
+      summary: details[meeting.id]?.summary ?? "",
     });
+    setSummaryLoaded(Boolean(details[meeting.id]));
     setError("");
     setFormOpen(true);
+
+    // The list omits summaries to stay small, so the full record has to be
+    // fetched before it can be edited — otherwise saving would blank it.
+    if (details[meeting.id]) return;
+    try {
+      const res = await fetch(`/api/meetings/${meeting.id}`);
+      const body = await res.json();
+      if (!res.ok) return;
+      setDetails((prev) => ({ ...prev, [meeting.id]: body }));
+      // Only fills a field the user has not started typing into, since the
+      // dialog is already open and editable while this request is in flight.
+      setForm((prev) => (prev.summary ? prev : { ...prev, summary: body.summary || "" }));
+      setSummaryLoaded(true);
+    } catch {
+      // summaryLoaded stays false, so the submit below leaves the stored
+      // summary alone rather than overwriting it with an empty box.
+    }
   }
 
   async function handleSubmit(e) {
@@ -136,6 +211,14 @@ export default function MeetingsPage() {
     try {
       // tags goes as the raw comma-separated string; the API splits it.
       const payload = { ...form, durationMinutes: Number(form.durationMinutes) };
+
+      // An untouched skeleton is not a summary — storing it would give the Ask
+      // page four empty headings to reason about.
+      if (isUntouchedTemplate(payload.summary)) payload.summary = "";
+
+      // Never send a summary we failed to load: PATCH would take the empty box
+      // literally and erase what is stored.
+      if (editingId && !summaryLoaded) delete payload.summary;
       const res = await fetch(editingId ? `/api/meetings/${editingId}` : "/api/meetings", {
         method: editingId ? "PATCH" : "POST",
         headers: { "Content-Type": "application/json" },
@@ -143,6 +226,17 @@ export default function MeetingsPage() {
       });
       const body = await res.json();
       if (!res.ok) throw new Error(body.error || "Save failed");
+
+      // The cached detail is now stale — drop it so reopening the row refetches
+      // rather than showing the summary that was just replaced.
+      if (editingId) {
+        setDetails((prev) => {
+          const next = { ...prev };
+          delete next[editingId];
+          return next;
+        });
+      }
+
       closeForm();
       await load();
     } catch (err) {
@@ -344,6 +438,33 @@ export default function MeetingsPage() {
         </table>
       </div>
 
+      {total > 0 && (
+        <div className="mt-4 flex items-center justify-between text-sm">
+          <span className="opacity-60">
+            {(page - 1) * PER_PAGE + 1}–{Math.min(page * PER_PAGE, total)} of {total}
+          </span>
+          <span className="flex items-center gap-2">
+            <button
+              className={btnGhost}
+              onClick={() => setPage((p) => Math.max(1, p - 1))}
+              disabled={page <= 1 || loading}
+            >
+              Previous
+            </button>
+            <span className="opacity-60">
+              Page {page} of {pageCount}
+            </span>
+            <button
+              className={btnGhost}
+              onClick={() => setPage((p) => Math.min(pageCount, p + 1))}
+              disabled={page >= pageCount || loading}
+            >
+              Next
+            </button>
+          </span>
+        </div>
+      )}
+
       {formOpen && (
         <div
           className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/50 p-4 sm:p-8"
@@ -386,6 +507,23 @@ export default function MeetingsPage() {
                 <div>
                   <label className={label} htmlFor="tags">Tags (comma separated)</label>
                   <input id="tags" className={input} value={form.tags} onChange={set("tags")} placeholder="left blank, tags are generated" />
+                </div>
+
+                <div className="sm:col-span-2">
+                  <label className={label} htmlFor="summary">Summary</label>
+                  <textarea
+                    id="summary"
+                    rows={8}
+                    className={`${input} resize-y font-normal`}
+                    value={form.summary}
+                    onChange={set("summary")}
+                    maxLength={50000}
+                    placeholder={"OVERVIEW\nWhat the meeting was about.\n\nDECISIONS\n- …\n\nACTION ITEMS\n- owner — task — deadline"}
+                  />
+                  <p className="mt-1 text-xs opacity-50">
+                    Searchable, and used to generate tags and to answer questions on the
+                    Ask page.
+                  </p>
                 </div>
 
               </div>
