@@ -299,8 +299,9 @@ export default function MeetingsPage() {
                   width the browser splits eight columns evenly and a Bengali
                   title wraps onto four lines beside empty space. */}
               <th className={`${th} w-[30%] min-w-[15rem]`}>Title</th>
-              <th className={th}>Date</th>
-              <th className={th}>Time</th>
+              {/* Date and time in one column: they are read together, and two
+                  columns cost width the title needs more. */}
+              <th className={th}>When</th>
               <th className={th}>Duration</th>
               <th className={`${th} w-[18%]`}>Tags</th>
               <th className={th}>Source</th>
@@ -312,13 +313,13 @@ export default function MeetingsPage() {
           <tbody>
             {loading && (
               <tr>
-                <td className={`${td} opacity-60`} colSpan={8}>Loading…</td>
+                <td className={`${td} opacity-60`} colSpan={7}>Loading…</td>
               </tr>
             )}
 
             {!loading && meetings.length === 0 && (
               <tr>
-                <td className={`${td} opacity-60`} colSpan={8}>No meetings scheduled.</td>
+                <td className={`${td} opacity-60`} colSpan={7}>No meetings scheduled.</td>
               </tr>
             )}
 
@@ -347,8 +348,12 @@ export default function MeetingsPage() {
                     )}
                   </td>
 
-                  <td className={`${td} whitespace-nowrap`}>{formatDate(meeting.startsAt)}</td>
-                  <td className={`${td} whitespace-nowrap`}>{formatTime(meeting.startsAt)}</td>
+                  <td className={`${td} whitespace-nowrap`}>
+                    {formatDate(meeting.startsAt)}
+                    <span className="block text-xs opacity-50">
+                      {formatTime(meeting.startsAt)}
+                    </span>
+                  </td>
                   <td className={`${td} whitespace-nowrap`}>{meeting.durationMinutes} min</td>
                   <td className={td}>
                     {meeting.tags?.length ? (
@@ -411,7 +416,7 @@ export default function MeetingsPage() {
                 // a detail row the title toggles open.
                 expanded && (
                   <tr key={`${meeting.id}-detail`} className="border-b border-black/5 bg-black/[0.02] dark:border-white/5 dark:bg-white/[0.03]">
-                    <td className="px-4 py-4" colSpan={8}>
+                    <td className="px-4 py-4" colSpan={7}>
                       {!loaded && <p className="text-sm opacity-60">Loading…</p>}
                       {loaded?.error && (
                         <p className="text-sm text-red-600 dark:text-red-400">{loaded.error}</p>

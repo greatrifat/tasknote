@@ -11,7 +11,7 @@ export default function RootLayout({ children }) {
     <html lang="en">
       <body className="min-h-screen">
         <header className="border-b border-black/10 dark:border-white/10">
-          <nav className="mx-auto flex max-w-5xl items-center gap-6 px-6 py-4">
+          <nav className="mx-auto flex max-w-7xl items-center gap-6 px-6 py-4">
             <Link href="/" className="text-lg font-semibold tracking-tight">
               TaskNote
             </Link>
@@ -34,7 +34,7 @@ export default function RootLayout({ children }) {
             </div>
           </nav>
         </header>
-        <main className="mx-auto max-w-5xl px-6 py-10">{children}</main>
+        <main className="mx-auto max-w-7xl px-6 py-10">{children}</main>
       </body>
     </html>
   );
